@@ -8,6 +8,7 @@ import dk.sdu.dosura.data.local.entity.Medication
 import dk.sdu.dosura.data.local.entity.MedicationLog
 import dk.sdu.dosura.data.repository.MedicationLogRepository
 import dk.sdu.dosura.data.repository.MedicationRepository
+import dk.sdu.dosura.notification.MedicationScheduler
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -25,10 +26,20 @@ data class MedicationDetailUiState(
 class MedicationDetailViewModel @Inject constructor(
     private val medicationRepository: MedicationRepository,
     private val logRepository: MedicationLogRepository,
+    private val medicationScheduler: MedicationScheduler,
     savedStateHandle: SavedStateHandle
 ) : ViewModel() {
 
-    private val medicationId: Long = savedStateHandle.get<String>("medicationId")?.toLongOrNull() ?: 0L
+    // medicationId may be passed as Long (NavType.LongType), Int or as String (from other flows)
+    private val medicationId: Long = run {
+        val raw: Any? = savedStateHandle.get<Any>("medicationId")
+        when (raw) {
+            is Long -> raw
+            is Int -> raw.toLong()
+            is String -> raw.toLongOrNull() ?: 0L
+            else -> 0L
+        }
+    }
 
     private val _uiState = MutableStateFlow(MedicationDetailUiState())
     val uiState: StateFlow<MedicationDetailUiState> = _uiState.asStateFlow()
@@ -70,7 +81,6 @@ class MedicationDetailViewModel @Inject constructor(
                     _uiState.value = _uiState.value.copy(logs = logs)
                 }
             } catch (e: Exception) {
-                // Logs are optional, don't fail
             }
         }
     }
@@ -79,6 +89,7 @@ class MedicationDetailViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 _uiState.value.medication?.let {
+                    medicationScheduler.cancelMedicationReminders(it.id)
                     medicationRepository.deleteMedication(it)
                     onDeleted()
                 }

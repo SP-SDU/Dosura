@@ -1,5 +1,9 @@
 package dk.sdu.dosura.presentation.caregiver.link
 
+import android.Manifest
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -9,10 +13,12 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -23,6 +29,42 @@ fun LinkPatientScreen(
     onPatientLinked: () -> Unit
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val context = LocalContext.current
+    
+    val requiredPermissions = buildList {
+        add(Manifest.permission.ACCESS_WIFI_STATE)
+        add(Manifest.permission.CHANGE_WIFI_MULTICAST_STATE)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            add(Manifest.permission.NEARBY_WIFI_DEVICES)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            add(Manifest.permission.ACCESS_FINE_LOCATION)
+        }
+    }
+    
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        val allGranted = permissions.values.all { it }
+        if (allGranted) {
+            viewModel.linkPatient(onSuccess = onPatientLinked)
+        }
+    }
+    
+    fun checkAndRequestPermissions() {
+        val hasAllPermissions = requiredPermissions.all { permission ->
+            ContextCompat.checkSelfPermission(
+                context,
+                permission
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        }
+        
+        if (hasAllPermissions) {
+            viewModel.linkPatient(onSuccess = onPatientLinked)
+        } else {
+            permissionLauncher.launch(requiredPermissions.toTypedArray())
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -84,11 +126,11 @@ fun LinkPatientScreen(
             Spacer(modifier = Modifier.height(32.dp))
             
             Button(
-                onClick = { viewModel.linkPatient(onPatientLinked) },
+                onClick = { checkAndRequestPermissions() },
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(56.dp),
-                enabled = !uiState.isLoading && uiState.linkCode.length == 6,
+                enabled = uiState.linkCode.length == 6 && !uiState.isLoading,
                 shape = RoundedCornerShape(12.dp)
             ) {
                 if (uiState.isLoading) {

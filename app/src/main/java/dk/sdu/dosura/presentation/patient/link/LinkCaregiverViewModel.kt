@@ -6,6 +6,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import dk.sdu.dosura.data.local.entity.CaregiverLink
 import dk.sdu.dosura.data.preferences.UserPreferencesManager
 import dk.sdu.dosura.data.repository.CaregiverLinkRepository
+import dk.sdu.dosura.p2p.P2PLinkManager
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -25,7 +26,8 @@ data class LinkCaregiverUiState(
 @HiltViewModel
 class LinkCaregiverViewModel @Inject constructor(
     private val caregiverLinkRepository: CaregiverLinkRepository,
-    private val userPreferencesManager: UserPreferencesManager
+    private val userPreferencesManager: UserPreferencesManager,
+    private val p2pLinkManager: P2PLinkManager
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(LinkCaregiverUiState())
@@ -43,21 +45,22 @@ class LinkCaregiverViewModel @Inject constructor(
                 val prefs = userPreferencesManager.userPreferences.first()
                 val userId = prefs.userId
                 
-                // Generate a unique 6-digit code
                 val code = generateUniqueCode()
                 
-                // Create a pending link entry
                 val caregiverLink = CaregiverLink(
                     patientId = userId,
-                    caregiverId = "pending", // Will be updated when caregiver confirms
-                    patientName = "Patient", // Could be stored in preferences
+                    caregiverId = "pending",
+                    patientName = "Patient",
                     caregiverName = "Pending",
                     linkCode = code,
-                    isActive = false, // Not active until caregiver confirms
+                    isActive = false,
                     createdAt = System.currentTimeMillis()
                 )
                 
                 caregiverLinkRepository.insertLink(caregiverLink)
+                
+                // Start P2P advertising
+                p2pLinkManager.startPatientMode(userId, code)
                 
                 _uiState.value = _uiState.value.copy(
                     linkCode = code,

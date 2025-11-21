@@ -3,6 +3,7 @@ package dk.sdu.dosura.navigation
 sealed class Screen(val route: String) {
     // Onboarding
     object Welcome : Screen("welcome")
+    object Permissions : Screen("permissions")
     object RoleSelection : Screen("role_selection")
     
     // Patient Screens

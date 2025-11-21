@@ -7,6 +7,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import dk.sdu.dosura.data.local.entity.Medication
 import dk.sdu.dosura.data.preferences.UserPreferencesManager
 import dk.sdu.dosura.data.repository.MedicationRepository
+import dk.sdu.dosura.notification.MedicationScheduler
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import java.util.Calendar
@@ -15,7 +16,8 @@ import javax.inject.Inject
 @HiltViewModel
 class AddMedicationViewModel @Inject constructor(
     private val medicationRepository: MedicationRepository,
-    private val preferencesManager: UserPreferencesManager
+    private val preferencesManager: UserPreferencesManager,
+    private val medicationScheduler: MedicationScheduler
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(AddMedicationUiState())
@@ -85,7 +87,10 @@ class AddMedicationViewModel @Inject constructor(
                         startDate = Calendar.getInstance().timeInMillis
                     )
                     
-                    medicationRepository.insertMedication(medication)
+                    val medicationId = medicationRepository.insertMedication(medication)
+                    val savedMedication = medication.copy(id = medicationId)
+                    medicationScheduler.scheduleMedicationReminders(savedMedication)
+                    
                     _uiState.value = state.copy(isLoading = false, isSaved = true)
                     onSuccess()
                 }

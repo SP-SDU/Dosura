@@ -3,7 +3,7 @@ package dk.sdu.dosura.data.preferences
 import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.*
-import androidx.datastore.preferences.preferencesDataStore
+import dk.sdu.dosura.data.preferences.dataStore
 import dk.sdu.dosura.domain.model.UserRole
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
@@ -12,7 +12,7 @@ import java.io.IOException
 import javax.inject.Inject
 import javax.inject.Singleton
 
-private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "dosura_preferences")
+// Use centralized Context.dataStore defined in AppDataStore.kt
 
 @Singleton
 class UserPreferencesManager @Inject constructor(

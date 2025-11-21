@@ -1,8 +1,6 @@
 package dk.sdu.dosura.navigation
 
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
+import androidx.compose.runtime.*
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
@@ -15,10 +13,13 @@ import dk.sdu.dosura.presentation.caregiver.link.LinkPatientScreen
 import dk.sdu.dosura.presentation.caregiver.message.SendMessageScreen
 import dk.sdu.dosura.presentation.caregiver.patient.PatientDetailScreen
 import dk.sdu.dosura.presentation.caregiver.settings.CaregiverSettingsScreen
+import dk.sdu.dosura.presentation.onboarding.PermissionScreen
 import dk.sdu.dosura.presentation.onboarding.RoleSelectionScreen
 import dk.sdu.dosura.presentation.onboarding.WelcomeScreen
 import dk.sdu.dosura.presentation.patient.add.AddMedicationScreen
 import dk.sdu.dosura.presentation.patient.detail.MedicationDetailScreen
+import dk.sdu.dosura.presentation.patient.dialog.MedicationDialogViewModel
+import dk.sdu.dosura.presentation.patient.dialog.TakeMedicationDialog
 import dk.sdu.dosura.presentation.patient.home.PatientHomeScreen
 import dk.sdu.dosura.presentation.patient.link.LinkCaregiverScreen
 import dk.sdu.dosura.presentation.patient.settings.PatientSettingsScreen
@@ -27,8 +28,32 @@ import dk.sdu.dosura.presentation.onboarding.OnboardingViewModel
 @Composable
 fun DosuraNavGraph(
     navController: NavHostController,
-    startDestination: String
+    startDestination: String,
+    showMedicationDialog: Boolean = false,
+    medicationIdFromNotification: Long? = null,
+    medicationNameFromNotification: String? = null,
+    scheduledTimeFromNotification: Long? = null
 ) {
+    var showDialog by remember { mutableStateOf(showMedicationDialog) }
+    val dialogViewModel: MedicationDialogViewModel = hiltViewModel()
+    
+    if (showDialog && medicationIdFromNotification != null && medicationNameFromNotification != null) {
+        TakeMedicationDialog(
+            medicationName = medicationNameFromNotification,
+            scheduledTime = scheduledTimeFromNotification ?: System.currentTimeMillis(),
+            onTake = {
+                dialogViewModel.takeMedication(
+                    medicationIdFromNotification,
+                    scheduledTimeFromNotification ?: System.currentTimeMillis()
+                )
+            },
+            onSnooze = {
+                dialogViewModel.snoozeMedication(medicationIdFromNotification, medicationNameFromNotification)
+            },
+            onDismiss = { showDialog = false }
+        )
+    }
+    
     NavHost(
         navController = navController,
         startDestination = startDestination
@@ -37,8 +62,18 @@ fun DosuraNavGraph(
         composable(Screen.Welcome.route) {
             WelcomeScreen(
                 onNavigateToRoleSelection = {
-                    navController.navigate(Screen.RoleSelection.route) {
+                    navController.navigate(Screen.Permissions.route) {
                         popUpTo(Screen.Welcome.route) { inclusive = true }
+                    }
+                }
+            )
+        }
+        
+        composable(Screen.Permissions.route) {
+            PermissionScreen(
+                onPermissionsGranted = {
+                    navController.navigate(Screen.RoleSelection.route) {
+                        popUpTo(Screen.Permissions.route) { inclusive = true }
                     }
                 }
             )

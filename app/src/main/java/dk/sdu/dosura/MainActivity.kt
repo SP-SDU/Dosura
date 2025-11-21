@@ -12,6 +12,7 @@ import androidx.compose.ui.Modifier
 import androidx.navigation.compose.rememberNavController
 import dagger.hilt.android.AndroidEntryPoint
 import dk.sdu.dosura.data.preferences.UserPreferencesManager
+import dk.sdu.dosura.notification.NotificationHelper
 import dk.sdu.dosura.navigation.DosuraNavGraph
 import dk.sdu.dosura.navigation.Screen
 import dk.sdu.dosura.ui.theme.DosuraTheme
@@ -29,6 +30,11 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         
+        val medicationIdFromNotification = intent?.getLongExtra(NotificationHelper.EXTRA_MEDICATION_ID, -1L)
+        val medicationNameFromNotification = intent?.getStringExtra(NotificationHelper.EXTRA_MEDICATION_NAME)
+        val scheduledTimeFromNotification = intent?.getLongExtra(NotificationHelper.EXTRA_SCHEDULED_TIME, System.currentTimeMillis())
+        val showDialog = intent?.action == "SHOW_MEDICATION_DIALOG" && medicationIdFromNotification != -1L
+        
         setContent {
             DosuraTheme {
                 Surface(
@@ -37,7 +43,6 @@ class MainActivity : ComponentActivity() {
                 ) {
                     val navController = rememberNavController()
                     
-                    // Determine start destination based on onboarding status
                     val startDestination = remember {
                         runBlocking {
                             val prefs = preferencesManager.userPreferences.first()
@@ -54,10 +59,19 @@ class MainActivity : ComponentActivity() {
                     
                     DosuraNavGraph(
                         navController = navController,
-                        startDestination = startDestination
+                        startDestination = startDestination,
+                        showMedicationDialog = showDialog,
+                        medicationIdFromNotification = medicationIdFromNotification,
+                        medicationNameFromNotification = medicationNameFromNotification,
+                        scheduledTimeFromNotification = scheduledTimeFromNotification
                     )
                 }
             }
         }
+    }
+
+    override fun onNewIntent(intent: android.content.Intent?) {
+        super.onNewIntent(intent)
+        setIntent(intent)
     }
 }

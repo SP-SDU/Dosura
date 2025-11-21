@@ -133,7 +133,6 @@ fun AddMedicationScreen(
                         Spacer(modifier = Modifier.height(12.dp))
 
                         if (uiState.photoUri != null) {
-                            // Show selected photo
                             Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -148,7 +147,6 @@ fun AddMedicationScreen(
                                     contentScale = ContentScale.Crop
                                 )
                                 
-                                // Delete button
                                 IconButton(
                                     onClick = { viewModel.updatePhotoUri(null) },
                                     modifier = Modifier
@@ -166,7 +164,6 @@ fun AddMedicationScreen(
                                 }
                             }
                         } else {
-                            // Photo picker buttons
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -181,8 +178,6 @@ fun AddMedicationScreen(
                                 
                                 OutlinedButton(
                                     onClick = { 
-                                        // For camera, you'd need to create a URI first
-                                        // For simplicity, we'll just use gallery for now
                                         showPhotoOptions = true
                                     },
                                     modifier = Modifier.weight(1f),

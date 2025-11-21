@@ -17,6 +17,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import coil.compose.AsyncImage
 import coil.compose.rememberAsyncImagePainter
 import dk.sdu.dosura.data.local.entity.MedicationLog
 import java.text.SimpleDateFormat
@@ -83,18 +84,20 @@ fun MedicationDetailScreen(
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
                 uiState.medication?.let { medication ->
-                    // Photo (if available)
                     if (!medication.photoUri.isNullOrBlank()) {
                         item {
                             Card(modifier = Modifier.fillMaxWidth()) {
-                                Image(
-                                    painter = rememberAsyncImagePainter(medication.photoUri),
+                                AsyncImage(
+                                    model = medication.photoUri,
                                     contentDescription = "Medication photo",
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .height(200.dp)
                                         .clip(RoundedCornerShape(12.dp)),
-                                    contentScale = ContentScale.Crop
+                                    contentScale = ContentScale.Crop,
+                                    error = androidx.compose.ui.graphics.painter.ColorPainter(
+                                        MaterialTheme.colorScheme.surfaceVariant
+                                    )
                                 )
                             }
                         }
