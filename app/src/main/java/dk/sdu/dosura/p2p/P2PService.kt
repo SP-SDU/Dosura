@@ -7,6 +7,8 @@ import android.net.wifi.WifiManager
 import android.util.Log
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.CompletableDeferred
+import com.google.gson.Gson
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -20,6 +22,8 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 @Singleton
+internal val gson = Gson()
+
 class P2PService @Inject constructor(
     @ApplicationContext private val context: Context
 ) {
@@ -37,7 +41,11 @@ class P2PService @Inject constructor(
     val discoveredPeers: StateFlow<List<PeerInfo>> = _discoveredPeers
     
     private val messageChannel = Channel<P2PMessage>(Channel.UNLIMITED)
+    data class IncomingP2PMessage(val message: P2PMessage, val reply: (P2PMessage) -> Unit)
+    private val incomingChannel = Channel<IncomingP2PMessage>(Channel.UNLIMITED)
     private val pendingResolves = mutableSetOf<String>()
+    // pendingAcks map no longer used; ACKs are replied to directly on socket-level
+    private var serverUserId: String? = null
     
     fun startAdvertising(port: Int, userId: String) {
         try {
@@ -79,16 +87,25 @@ class P2PService @Inject constructor(
             }
             
             nsdManager.registerService(serviceInfo, NsdManager.PROTOCOL_DNS_SD, registrationListener)
+            serverUserId = userId
             
             // Start accepting connections
-            Thread {
+                Thread {
                 while (!serverSocket!!.isClosed) {
                     try {
                         val clientSocket = serverSocket!!.accept()
+                        Log.d("P2P", "Accepted connection from ${clientSocket.inetAddress.hostAddress}:${clientSocket.port}")
                         handleClient(clientSocket)
+                    } catch (e: java.net.SocketTimeoutException) {
+                        // On some devices, accept() can EAGAIN/SocketTimeoutException frequently; avoid noisy logs and tight-loop CPU spin
+                        if (!serverSocket!!.isClosed) {
+                            Log.d("P2P", "Accept timed out (EAGAIN); continuing")
+                            try { Thread.sleep(5) } catch (_: Exception) { }
+                        }
                     } catch (e: Exception) {
                         if (!serverSocket!!.isClosed) {
                             Log.e("P2P", "Error accepting connection", e)
+                            try { Thread.sleep(10) } catch (_: Exception) { }
                         }
                     }
                 }
@@ -186,13 +203,113 @@ class P2PService @Inject constructor(
             withContext(Dispatchers.IO) {
                 Socket(peer.host, peer.port).use { socket ->
                     val writer = PrintWriter(socket.getOutputStream(), true)
-                    writer.println(message.toJson())
+                    writer.println(gson.toJson(message))
                     true
                 }
             }
         } catch (e: Exception) {
             Log.e("P2P", "Error sending message", e)
             false
+        }
+    }
+
+    suspend fun sendMessageWithAck(peer: PeerInfo, message: P2PMessage, timeoutMs: Int = 3000): Boolean {
+        return try {
+            withContext(Dispatchers.IO) {
+                Socket(peer.host, peer.port).use { socket ->
+                    // Ensure read timeout so we don't block indefinitely
+                    socket.soTimeout = timeoutMs
+                    val writer = PrintWriter(socket.getOutputStream(), true)
+                    val reader = BufferedReader(InputStreamReader(socket.getInputStream()))
+
+                    val msgId = message.messageId ?: java.util.UUID.randomUUID().toString()
+                    val msgWithId = message.copy(messageId = msgId, timestamp = System.currentTimeMillis())
+                    writer.println(gson.toJson(msgWithId))
+
+                    try {
+                        val line = reader.readLine()
+                        if (line.isNullOrBlank()) return@use false
+                        val resp = gson.fromJson(line, P2PMessage::class.java)
+                        val isAck = (resp.type == P2PMessage.MessageType.ACK && resp.messageId == msgId)
+                        if (isAck) {
+                            // Try to read a subsequent message (e.g., response body) and forward to messageChannel
+                            try {
+                                // Give the server some time to write a response after ACK; network on Android devices can be slow
+                                socket.soTimeout = 2000
+                                val nextLine = reader.readLine()
+                                if (!nextLine.isNullOrBlank()) {
+                                    val maybeMessage = gson.fromJson(nextLine, P2PMessage::class.java)
+                                    // Avoid loops: do not push ACK back
+                                    if (maybeMessage.type != P2PMessage.MessageType.ACK) {
+                                        messageChannel.trySend(maybeMessage)
+                                    }
+                                } else {
+                                    Log.d("P2P", "No immediate follow-up message after ACK from ${peer.name}")
+                                }
+                            } catch (e: Exception) {
+                                Log.w("P2P", "No follow-up message after ACK or error reading response: ${e.message}")
+                            }
+                            return@use true
+                        }
+                        return@use false
+                    } catch (re: java.net.SocketTimeoutException) {
+                        Log.w("P2P", "Timed out waiting for ACK from ${peer.name}")
+                        return@use false
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("P2P", "Error in sendMessageWithAck", e)
+            false
+        }
+    }
+
+    // New method: send message, wait for ACK, and if a response body is received on the same socket, return it.
+    suspend fun sendMessageWithResponse(peer: PeerInfo, message: P2PMessage, timeoutMs: Int = 3000): P2PMessage? {
+        return try {
+            withContext(Dispatchers.IO) {
+                Socket(peer.host, peer.port).use { socket ->
+                    socket.soTimeout = timeoutMs
+                    val writer = PrintWriter(socket.getOutputStream(), true)
+                    val reader = BufferedReader(InputStreamReader(socket.getInputStream()))
+
+                    val msgId = message.messageId ?: java.util.UUID.randomUUID().toString()
+                    val msgWithId = message.copy(messageId = msgId, timestamp = System.currentTimeMillis())
+                    writer.println(gson.toJson(msgWithId))
+
+                    try {
+                        val line = reader.readLine()
+                        if (line.isNullOrBlank()) return@use null
+                        val resp = gson.fromJson(line, P2PMessage::class.java)
+                        Log.d("P2P", "sendMessageWithResponse received initial resp type=${resp.type} id=${resp.messageId}")
+                        val isAck = (resp.type == P2PMessage.MessageType.ACK && resp.messageId == msgId)
+                        if (isAck) {
+                            try {
+                                socket.soTimeout = 2000
+                                val nextLine = reader.readLine()
+                                    if (!nextLine.isNullOrBlank()) {
+                                        val maybeMessage = gson.fromJson(nextLine, P2PMessage::class.java)
+                                        Log.d("P2P", "sendMessageWithResponse got follow-up message type=${maybeMessage.type} id=${maybeMessage.messageId}")
+                                        // Ensure follow-up message corresponds to the request
+                                        if (maybeMessage.type != P2PMessage.MessageType.ACK && maybeMessage.messageId == msgId) {
+                                            return@use maybeMessage
+                                        } else if (maybeMessage.type != P2PMessage.MessageType.ACK) {
+                                            Log.w("P2P", "sendMessageWithResponse received follow-up message not matching request id=${msgId} got=${maybeMessage.messageId}; ignoring")
+                                        }
+                                }
+                            } catch (ignore: Exception) { }
+                            return@use null
+                        }
+                        return@use null
+                    } catch (re: java.net.SocketTimeoutException) {
+                        Log.w("P2P", "Timed out waiting for ACK from ${peer.name}")
+                        return@use null
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("P2P", "Error in sendMessageWithResponse", e)
+            null
         }
     }
     
@@ -202,8 +319,70 @@ class P2PService @Inject constructor(
                 val reader = BufferedReader(InputStreamReader(socket.getInputStream()))
                 val messageJson = reader.readLine()
                 messageJson?.let {
-                    val message = P2PMessage.fromJson(it)
-                    messageChannel.trySend(message)
+                    try {
+                        val message = gson.fromJson(it, P2PMessage::class.java)
+                        Log.d("P2P", "Received message type=${message.type} from sender=${message.senderId} messageId=${message.messageId}")
+                        // If this is an ACK, ignore it (ACKs are handled on client sockets)
+                        if (message.type == P2PMessage.MessageType.ACK) {
+                            // Ignore
+                        } else {
+                            // Send back ACK
+                            try {
+                                val ack = P2PMessage(
+                                    type = P2PMessage.MessageType.ACK,
+                                    senderId = serverUserId ?: "",
+                                    data = "",
+                                    messageId = message.messageId,
+                                    timestamp = System.currentTimeMillis()
+                                )
+                                Log.d("P2P", "Sending ACK for messageId=${message.messageId} to ${socket.inetAddress.hostAddress}:${socket.port}")
+                                // Explicitly flush the output so the client is certain to receive the ACK
+                                val ackWriter = PrintWriter(socket.getOutputStream(), true)
+                                ackWriter.println(gson.toJson(ack))
+                                try {
+                                    ackWriter.flush()
+                                } catch (e: Exception) {
+                                    Log.w("P2P", "Failed to flush ACK writer: ${e.message}")
+                                }
+                            } catch (e: Exception) {
+                                Log.w("P2P", "Failed to send ACK: ${e.message}")
+                            }
+                            // Allow higher-level components to respond on this same socket
+                            // Keep the socket open until replies on this socket have been sent (or timeout)
+                            val writer = PrintWriter(socket.getOutputStream(), true)
+                            val replyLatch = java.util.concurrent.CountDownLatch(1)
+                            val replyFn: (P2PMessage) -> Unit = { resp ->
+                                try {
+                                    writer.println(gson.toJson(resp))
+                                    try {
+                                        writer.flush()
+                                    } catch (e: Exception) {
+                                        Log.w("P2P", "Failed to flush reply writer: ${e.message}")
+                                    }
+                                } catch (e: Exception) {
+                                    Log.w("P2P", "Failed to write reply on same socket: ${e.message}")
+                                } finally {
+                                    // Signal that a reply has been written (even on error) so the server can close the socket
+                                    try { replyLatch.countDown() } catch (_: Exception) {}
+                                }
+                            }
+                            incomingChannel.trySend(IncomingP2PMessage(message, replyFn))
+                            // Wait a short moment for a reply to be written on this socket, if any. This ensures the other side (caregiver) has time to read ACK and the follow-up message.
+                            try {
+                                val didReply = replyLatch.await(2000, java.util.concurrent.TimeUnit.MILLISECONDS)
+                                if (didReply) {
+                                    Log.d("P2P", "Reply(s) were written on same socket; closing now: ${socket.inetAddress.hostAddress}:${socket.port}")
+                                } else {
+                                    Log.d("P2P", "No reply written on this socket within timeout; closing: ${socket.inetAddress.hostAddress}:${socket.port}")
+                                }
+                            } catch (e: Exception) {
+                                Log.w("P2P", "Error waiting for reply latch: ${e.message}")
+                            }
+                            messageChannel.trySend(message)
+                        }
+                    } catch (e: Exception) {
+                        Log.e("P2P", "Failed to parse incoming message", e)
+                    }
                 }
             } catch (e: Exception) {
                 Log.e("P2P", "Error handling client", e)
@@ -215,6 +394,10 @@ class P2PService @Inject constructor(
     
     suspend fun receiveMessage(): P2PMessage {
         return messageChannel.receive()
+    }
+
+    suspend fun receiveIncomingMessage(): IncomingP2PMessage {
+        return incomingChannel.receive()
     }
     
     fun stopAdvertising() {
@@ -254,31 +437,26 @@ data class PeerInfo(
 data class P2PMessage(
     val type: MessageType,
     val senderId: String,
-    val data: String
+    val data: String,
+    val messageId: String? = null,
+    val timestamp: Long? = null
 ) {
     enum class MessageType {
         LINK_REQUEST,
         LINK_RESPONSE,
         MEDICATION_SYNC,
+        MEDICATION_LOG,
+        ACK,
         MOTIVATIONAL_MESSAGE
     }
     
     fun toJson(): String {
-        return """{"type":"$type","senderId":"$senderId","data":"$data"}"""
+        return gson.toJson(this)
     }
-    
+
     companion object {
         fun fromJson(json: String): P2PMessage {
-            // Simple JSON parsing (could use Gson for complex cases)
-            val typeMatch = Regex(""""type":"([^"]+)"""").find(json)
-            val senderMatch = Regex(""""senderId":"([^"]+)"""").find(json)
-            val dataMatch = Regex(""""data":"([^"]+)"""").find(json)
-            
-            return P2PMessage(
-                type = MessageType.valueOf(typeMatch?.groupValues?.get(1) ?: "LINK_REQUEST"),
-                senderId = senderMatch?.groupValues?.get(1) ?: "",
-                data = dataMatch?.groupValues?.get(1) ?: ""
-            )
+            return gson.fromJson(json, P2PMessage::class.java)
         }
     }
 }

@@ -12,6 +12,7 @@ import dk.sdu.dosura.p2p.P2PMessage
 import dk.sdu.dosura.p2p.P2PService
 import dk.sdu.dosura.p2p.PeerInfo
 import kotlinx.coroutines.delay
+import com.google.gson.Gson
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -232,15 +233,58 @@ class P2PTest {
             )
         )
 
-        // Simulate serialization for P2P transfer
-        val data = medications.joinToString("|") { 
-            "${it.id}:${it.name}:${it.dosage}:${it.reminderTimes.joinToString(",")}"
-        }
+        // Simulate JSON serialization for P2P transfer
+        val gson = Gson()
+        val data = gson.toJson(medications)
+        val parsedMeds = gson.fromJson(data, Array<Medication>::class.java).toList()
+        assertEquals(2, parsedMeds.size)
+        assertEquals("Med A", parsedMeds[0].name)
+        assertEquals("Med B", parsedMeds[1].name)
+        assertEquals(listOf("08:00", "20:00"), parsedMeds[0].reminderTimes)
+        assertEquals(listOf("12:00"), parsedMeds[1].reminderTimes)
+    }
 
-        assertTrue(data.contains("Med A"))
-        assertTrue(data.contains("Med B"))
-        assertTrue(data.contains("08:00,20:00"))
-        assertTrue(data.contains("12:00"))
+    @Test
+    fun testParseMedicationsFromData() = runBlocking {
+        val gson = Gson()
+        val med = Medication(
+            id = 1,
+            name = "MedA",
+            dosage = "100mg",
+            userId = "patient_001",
+            reminderTimes = listOf("08:00", "20:00"),
+            daysOfWeek = emptyList(),
+            startDate = System.currentTimeMillis()
+        )
+        val data = gson.toJson(listOf(med))
+        val meds = dk.sdu.dosura.p2p.parseMedicationsFromData(data, "patient_001")
+        assertEquals(1, meds.size)
+        val parsedMed = meds[0]
+        assertEquals(1L, parsedMed.id)
+        assertEquals("MedA", parsedMed.name)
+        assertEquals("100mg", parsedMed.dosage)
+        assertEquals(listOf("08:00", "20:00"), parsedMed.reminderTimes)
+        assertEquals("patient_001", parsedMed.userId)
+    }
+
+    @Test
+    fun testParseLogsFromData() = runBlocking {
+        val gson = Gson()
+        val log = dk.sdu.dosura.data.local.entity.MedicationLog(
+            id = 10,
+            medicationId = 1,
+            scheduledTime = 1630000000L,
+            takenTime = 1630000000L,
+            status = dk.sdu.dosura.data.local.entity.LogStatus.TAKEN
+        )
+        val data = gson.toJson(listOf(log))
+        val logs = dk.sdu.dosura.p2p.parseLogsFromData(data, "patient_001")
+        assertEquals(1, logs.size)
+        val parsedLog = logs[0]
+        assertEquals(1L, parsedLog.medicationId)
+        assertEquals(10L, parsedLog.id)
+        assertEquals(dk.sdu.dosura.data.local.entity.LogStatus.TAKEN, parsedLog.status)
+        assertEquals(1630000000L, parsedLog.scheduledTime)
     }
 
     @Test

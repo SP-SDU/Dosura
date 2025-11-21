@@ -90,4 +90,39 @@ class NotificationHelper @Inject constructor(
     fun cancelNotification(medicationId: Long) {
         NotificationManagerCompat.from(context).cancel(medicationId.toInt())
     }
+
+    fun showMotivationalMessage(senderName: String?, message: String, timestamp: Long = System.currentTimeMillis()) {
+        val intent = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            action = "OPEN_MESSAGES"
+        }
+
+        val pendingIntent = PendingIntent.getActivity(
+            context,
+            (timestamp % Int.MAX_VALUE).toInt(),
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val channelId = dk.sdu.dosura.DosuraApplication.MESSAGE_CHANNEL_ID
+        val title = senderName?.let { "$it sent a message" } ?: "New message"
+
+        val notification = NotificationCompat.Builder(context, channelId)
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setContentTitle(title)
+            .setContentText(message)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+            .setAutoCancel(true)
+            .setContentIntent(pendingIntent)
+            .build()
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) {
+                NotificationManagerCompat.from(context).notify((timestamp % Int.MAX_VALUE).toInt(), notification)
+            }
+        } else {
+            NotificationManagerCompat.from(context).notify((timestamp % Int.MAX_VALUE).toInt(), notification)
+        }
+    }
 }
